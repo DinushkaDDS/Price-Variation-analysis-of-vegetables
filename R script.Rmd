@@ -1,0 +1,360 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+
+```{r}
+library(tidyverse)
+```
+```{r}
+library(tsibble)
+library(tsibbledata)
+library(lubridate)
+library(ggplot2)
+library(ggfortify)
+library(feasts)
+library(fable)
+```
+
+```{r}
+data <- readxl::read_excel("C:/Users/ddsdi/Desktop/Msc Group Project/final Datset.xlsx")  #R Dataset
+data <- data %>%
+   mutate(DATEINDEX = yearweek(DATE)) %>%
+   as_tsibble(index = DATEINDEX, key = c(SALE_TYPE,VEGETABLE
+))                                                             
+data
+```
+```{r}
+dataset_VEGETABLE <- data %>%
+  filter(VEGETABLE == "CABBAGES")
+
+autoplot(dataset_VEGETABLE, PRICE) +
+  labs(title = "CARROTS - Price",
+       subtitle = "Dambulla ",
+       y = "Price (Rs. per Kg)")
+```
+```{r}
+dataset_VEGETABLE %>%
+  gg_season(PRICE, period = "year") +
+  labs(y = "Price for Kg",
+       title = "Seasonal plot: Price")
+```
+
+```{r fig.width=32,fig.height=16}
+# fig.width=24,fig.height=16
+
+subuqery_DS <- dataset_VEGETABLE %>% filter(SALE_TYPE == "R") %>% index_by(QUARTER_INDEX = yearmonth(DATE)) %>% group_by_key() %>%
+  summarise(
+    MEAN_PRICE = mean(PRICE)
+  )
+  
+subuqery_DS %>%
+  gg_subseries(MEAN_PRICE) +
+  labs(
+    y = "Price for Kg",
+    x = "Year",
+    title = "Sub Series plot: Quarterly Price"
+  )
+
+```
+```{r}
+dataset_VEGETABLE %>% filter(year(DATE)=="2018") %>% autoplot(PRICE)
+```
+```{r}
+dataset_VEGETABLE %>%
+  group_by(DATE) %>%
+  filter(SALE_TYPE=="R") ->x
+dataset_VEGETABLE %>%
+  group_by(DATE) %>%
+  filter(SALE_TYPE=="W") ->y
+
+
+combined <- merge(x, y, by.x = "DATE", by.y = "DATE")
+combined <- combined %>% select(DATE, PRICE.x, PRICE.y) 
+colnames(combined)[colnames(combined) == 'PRICE.x'] <- 'RETAIL'
+colnames(combined)[colnames(combined) == 'PRICE.y'] <- 'WHOLESALE'
+
+
+
+combined %>%
+  #filter(year(DATE) == 2018) %>%
+  ggplot(aes(x = RETAIL, y = WHOLESALE)) +
+  geom_point() +
+  labs(x = "RETAIL",
+       y = "WHOLESALE",
+       title = "PRICES OF BEANS")
+
+
+```
+
+
+```{r}
+tempData <- dataset_VEGETABLE %>% 
+            filter(SALE_TYPE=="R") %>%
+            index_by(INDEX = yearmonth(DATE)) %>% 
+            group_by(INDEX) %>%
+            summarise(
+              MEAN_PRICE = mean(PRICE)
+            )
+
+
+tempData %>% #filter(year(INDEX) == 2018) %>%
+  gg_lag(MEAN_PRICE, geom = "point") +
+  labs(x = "Mean price for Beans in quarters")
+```
+```{r}
+tempData %>% ACF(MEAN_PRICE, lag_max = 9)
+```
+```{r}
+tempData %>%
+  ACF(MEAN_PRICE) %>%
+  autoplot() + labs(title="Bean Mean Prices")
+```
+This plot shows us that data is comparable to "WHITE NOISE" as autocorrelation is close to zero and within the boundaries.
+
+Also when considering the prices it is important to understand the inflation of money as well. But since we dont have a price index, we will not consider that.
+
+```{r}
+lambda <- tempData %>%
+  features(MEAN_PRICE, features = guerrero) %>%
+  pull(lambda_guerrero)
+
+tempData %>%
+  autoplot(box_cox(MEAN_PRICE, lambda)) +
+  labs(y = lambda,
+       title = "Mean Price" ,
+         round(lambda,2))
+```
+```{r}
+dataset_VEGETABLE %>% filter(SALE_TYPE=="R") %>%
+  model(
+    classical_decomposition(PRICE, type = "multiplicative")
+  ) %>%
+  components() %>%
+  autoplot() +
+  labs(title = "Classical multiplicative decomposition of MEAN_PRICE for Beans - Retail")
+```
+We can clearly see that the seasonal decomposition include a recognizable pattern in roughly each 3 months which suggest the influence of various weather and plantation times Sri Lanka uses. (for Beans)
+
+```{r}
+x11_dcmp <- tempData %>%
+  model(x11 = X_13ARIMA_SEATS(MEAN_PRICE ~ x11())) %>%
+  components()
+autoplot(x11_dcmp) +
+  labs(title =
+    "Decomposition of MEAN PRICE of Beans using X-11.")
+
+```
+```{r}
+x11_dcmp %>%
+  ggplot(aes(x = INDEX)) +
+  geom_line(aes(y = MEAN_PRICE, colour = "Data")) +
+  geom_line(aes(y = season_adjust,
+                colour = "Seasonally Adjusted")) +
+  geom_line(aes(y = trend, colour = "Trend")) +
+  labs(y = "Price",
+       title = " ") +
+  scale_colour_manual(
+    values = c("gray", "#0072B2", "#D55E00"),
+    breaks = c("Data", "Seasonally Adjusted", "Trend")
+  )
+```
+
+```{r}
+seats_dcmp <- tempData %>%
+  model(seats = X_13ARIMA_SEATS(MEAN_PRICE ~ seats())) %>%
+  components()
+autoplot(seats_dcmp) +
+  labs(title = "Decomposition of MEAN_PRICE of Beans using SEATS")
+```
+```{r}
+dataset_VEGETABLE %>% filter(SALE_TYPE=="W") %>%
+  model(
+    STL(PRICE ~ trend(window = 7) +
+                   season(window = 'periodic'),
+    robust = TRUE)) %>%
+  components() %>%
+  autoplot()
+```
+
+```{r}
+
+fit <- dataset_VEGETABLE %>% 
+            filter(SALE_TYPE=="R") %>%
+            filter_index("2018 W01" ~ "2020 W52") %>%
+            model( Mean = MEAN(PRICE),
+                  `Naïve` = NAIVE(PRICE),
+                  `Seasonal naïve` = SNAIVE(PRICE~lag("1 months")))
+```
+
+```{r}
+fit %>%
+  forecast(h = 26) %>%
+  autoplot(dataset_VEGETABLE) +
+  labs(y = "Price", title = "Price Variation of using Simple forecasting methods")
+```
+
+```{r}
+
+fit_dcmp <- dataset_VEGETABLE %>%
+  model(stlf = decomposition_model(
+    STL(PRICE ~ trend(window = 7), robust = TRUE),
+    NAIVE(season_adjust)
+  ))
+
+fit_dcmp %>% filter(SALE_TYPE == "R") %>% gg_tsresiduals()
+fit_dcmp %>% filter(SALE_TYPE == "W") %>% gg_tsresiduals()
+
+```
+```{r}
+
+
+fit_dcmp %>%
+  forecast(h = 10) %>%
+  autoplot(dataset_VEGETABLE)+
+  labs(y = "Price value",
+       title = "Carrot Price forecast using STL decomposition")
+
+
+```
+```{r}
+fit_vegetable <- dataset_VEGETABLE %>%
+  model(TSLM(PRICE ~ trend() + season()))
+
+fit_vegetable %>% filter(SALE_TYPE=="R") %>% report()
+```
+```{r}
+fit_vegetable %>% filter(SALE_TYPE=="R") %>% augment() %>%
+  ggplot(aes(x = DATEINDEX)) +
+  geom_line(aes(y = PRICE, colour = "Data")) +
+  geom_line(aes(y = .fitted, colour = "Fitted")) +
+  scale_colour_manual(
+    values = c(Data = "black", Fitted = "#D55E00")
+  ) +
+  labs(y = "Price",
+       title = "Mean weekly price of beans") +
+  guides(colour = guide_legend(title = "Series"))
+```
+```{r}
+recent_prices <- dataset_VEGETABLE %>%filter_index("2018 W01" ~ "2020 W52") %>%
+  filter(SALE_TYPE=="R")
+
+fit_price <- recent_prices %>%
+  model(TSLM(PRICE ~ trend() + season()))
+
+fc_price <- forecast(fit_price, h = 26)
+
+fc_price %>%
+  autoplot(dataset_VEGETABLE) +
+  labs(
+    title = "Forecasts of Tomato Price using regression",
+    y = "Price"
+  )
+```
+```{r}
+# Estimate parameters
+fit_SES <- dataset_VEGETABLE %>%filter_index("2018 W01" ~ "2020 W52") %>% filter(SALE_TYPE=="R") %>%
+  model(ETS(PRICE ~ error("A") + trend("N") + season("N")))
+
+fc_SES <- fit_SES %>%
+  forecast(h = 26)
+
+fc_SES %>%
+  autoplot(dataset_VEGETABLE %>% filter(SALE_TYPE=="R")) +
+  geom_line(aes(y = .fitted), col="#A55E00",
+            data = augment(fit)) +
+  labs(y="PRICE", title="Tomato Price variation") +
+  guides(colour = "none")
+
+report(fit_SES)
+```
+
+```{r}
+
+fit_with_seasonality <- dataset_VEGETABLE%>%filter_index("2018 W01" ~ "2020 W52") %>%
+  model(
+    additive = ETS(PRICE ~ error("A") + trend("A") + season("A", period=4)),
+    multiplicative = ETS(PRICE ~ error("M") + trend("A") + season("M", period=4))
+  )
+
+fc_with_seasonality <- fit_with_seasonality %>% forecast(h = 26)
+
+fc_with_seasonality %>%
+  autoplot(dataset_VEGETABLE) +
+  labs(title="Cabbage Prices",
+       y="Price") +
+  guides(colour = guide_legend(title = "Forecast"))
+
+report(fit_with_seasonality %>% filter(SALE_TYPE=="R") %>% select("additive"))
+
+```
+```{r}
+components(fit_with_seasonality) %>%
+  autoplot() +
+  labs(title = "ETS components")
+```
+```{r}
+dataset_VEGETABLE %>%
+  filter(SALE_TYPE == "W") %>%
+  transmute(
+    `Log Prices` = log(PRICE),
+    `Single differenced log prices` = difference(log(PRICE), 1),
+    `Double differenced log prices` =
+                     difference(difference(log(PRICE), 1), 1)
+  ) %>%
+  pivot_longer(-DATEINDEX, names_to="Type", values_to="Price") %>%
+  mutate(
+    Type = factor(Type, levels = c(
+      "Log Prices",
+      "Single differenced log prices",
+      "Double differenced log prices"))
+  ) %>%
+  ggplot(aes(x = DATEINDEX, y = Price)) +
+  geom_line() +
+  facet_grid(vars(Type), scales = "free_y") +
+  labs(title = "Carrot Prices - Wholesale", y = NULL)
+
+
+```
+```{r}
+dataset_VEGETABLE%>%
+  features(PRICE, unitroot_kpss)
+
+dataset_VEGETABLE%>%
+  features(PRICE, unitroot_ndiffs)
+```
+Above values indicate that the series is stationary, even without doing any data transformations. therefore no need to differencing. same goes to seasonal differencing as well.
+
+```{r}
+dataset_VEGETABLE %>%
+  features(PRICE, unitroot_nsdiffs)
+```
+```{r}
+fit <- dataset_VEGETABLE%>%filter_index("2018 W01" ~ "2020 W52") %>%
+  model(ARIMA(PRICE))
+report(fit%>% filter(SALE_TYPE=="R"))
+```
+
+```{r}
+fit %>% forecast(h=26) %>%
+  autoplot(dataset_VEGETABLE) +
+  labs(y = "Price", title = "Tomato Prices")
+```
+
+```{r}
+fit2 <- dataset_VEGETABLE %>%
+  model(ARIMA(PRICE ~ pdq(1,0,0)))
+report(fit2 %>% filter(SALE_TYPE=="R"))
+
+fit2 %>% forecast(h=20) %>%
+  autoplot(dataset_VEGETABLE) +
+  labs(y = "Price", title = "Beans Prices")
+```
+
+```{r}
+
+```
+
+
+
